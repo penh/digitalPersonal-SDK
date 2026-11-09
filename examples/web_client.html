@@ -174,6 +174,16 @@
           <span id="qualityBadge" class="badge badge-warning">Quality: --</span>
           <span id="statusBadge" class="badge badge-danger">Disconnected</span>
         </div>
+        <div style="margin-top: 12px; padding: 10px; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid var(--border);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">BACKEND MODE</label>
+            <span id="activeModeLabel" style="font-size: 0.8rem; color: #38bdf8; font-weight: bold;">Auto</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <button id="btnModeMock" class="btn btn-secondary" style="padding: 6px; font-size: 0.8rem; margin-bottom: 0;">🔬 Simulation (Mock)</button>
+            <button id="btnModeHardware" class="btn btn-secondary" style="padding: 6px; font-size: 0.8rem; margin-bottom: 0;">🔌 Physical Hardware</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -272,9 +282,26 @@
     async function checkHealth() {
       try {
         const devices = await client.getStatus();
-        statusBadge.textContent = "Hardware Connected";
-        statusBadge.className = "badge badge-success";
-        log(`Connected to Python API: Found reader: ${devices[0]?.name || 'DigitalPersona 4500'}`);
+        if (devices && devices.length > 0) {
+          const dev = devices[0];
+          const isMock = dev.is_mock || dev.driver?.includes("mock") || dev.mode?.includes("mock");
+          if (isMock) {
+            statusBadge.textContent = "Simulation Mode";
+            statusBadge.className = "badge badge-warning";
+            document.getElementById("activeModeLabel").textContent = "Simulation (Virtual)";
+            log(`[Ready] Running in Virtual Simulation Mode: ${dev.name}`);
+          } else {
+            statusBadge.textContent = "Hardware Connected";
+            statusBadge.className = "badge badge-success";
+            document.getElementById("activeModeLabel").textContent = "Physical USB Hardware";
+            log(`[Ready] Physical USB scanner connected: ${dev.name} (${dev.driver || 'driver'})`);
+          }
+        } else {
+          statusBadge.textContent = "No Hardware Found";
+          statusBadge.className = "badge badge-danger";
+          document.getElementById("activeModeLabel").textContent = "No Device";
+          log("No physical reader detected. Click 'Simulation (Mock)' above to test without hardware.", "warn");
+        }
       } catch (err) {
         statusBadge.textContent = "Service Offline";
         statusBadge.className = "badge badge-danger";
@@ -282,6 +309,38 @@
       }
     }
     checkHealth();
+
+    // Mode Switcher Controls
+    document.getElementById("btnModeMock").addEventListener("click", async () => {
+      try {
+        await client.setMode("mock");
+        log("Switched backend mode to 'Simulation (Mock)'. Ready for testing.");
+        await checkHealth();
+      } catch (err) {
+        log(`Failed to switch to mock mode: ${err.message}`, "error");
+      }
+    });
+
+    document.getElementById("btnModeHardware").addEventListener("click", async () => {
+      try {
+        await client.setMode("hardware");
+        log("Switched backend mode to 'Physical Hardware'. Probing USB device...");
+        await checkHealth();
+      } catch (err) {
+        log(`Failed to switch to hardware mode: ${err.message}`, "error");
+      }
+    });
+
+    window.enableMockAndRetry = async function() {
+      try {
+        await client.setMode("mock");
+        log("Switched to Simulation Mode. Retrying capture...");
+        await checkHealth();
+        document.getElementById("btnScan").click();
+      } catch (e) {
+        log(`Error enabling simulation: ${e.message}`, "error");
+      }
+    };
 
     // 1. Capture Scan
     document.getElementById("btnScan").addEventListener("click", async () => {
@@ -312,7 +371,15 @@
 
         log(`[✓] Capture successful: ${scan.width}x${scan.height} @ ${scan.dpi} DPI (Quality: ${scan.quality_score}%)`);
       } catch (err) {
-        placeholder.innerHTML = `<div style="color:#f87171; padding:10px;">❌ Capture Failed:<br><small>${err.message}</small></div>`;
+        placeholder.innerHTML = `
+          <div style="color:#f87171; padding:10px; text-align:center;">
+            ❌ Capture Failed:<br>
+            <small style="display:block; margin:6px 0; color:#cbd5e1; font-size:0.8rem;">${err.message}</small>
+            <button class="btn btn-secondary" style="margin-top:8px; padding:6px 12px; font-size:0.8rem; width:auto; display:inline-block;" onclick="window.enableMockAndRetry()">
+              Switch to Simulation (Mock) Mode
+            </button>
+          </div>
+        `;
         log(`Capture failed: ${err.message}`, "error");
       } finally {
         btn.disabled = false;

@@ -19,15 +19,46 @@ import json
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
+# Ensure safe console encoding on Windows
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dp4500 import UareU4500, ReaderManager, FingerprintTemplate
 from dp4500.backends.mock import MockBackend
 
 # Global configuration
-USE_MOCK = "--mock" in sys.argv
-READER_BACKEND = MockBackend() if USE_MOCK else None
+INITIAL_MODE = "mock" if "--mock" in sys.argv else ("hardware" if "--hardware" in sys.argv else "auto")
+CURRENT_MODE = INITIAL_MODE
 PORT = int(os.environ.get("PORT", 8000))
+
+
+def get_reader_backend():
+    """
+    Returns (backend_instance_or_none, is_mock: bool).
+    - If CURRENT_MODE == 'mock': returns (MockBackend(), True)
+    - If CURRENT_MODE == 'hardware': returns (None, False) (delegates to hardware reader)
+    - If CURRENT_MODE == 'auto': tries hardware first; if not found, falls back to MockBackend().
+    """
+    global CURRENT_MODE
+    if CURRENT_MODE == "mock":
+        return MockBackend(), True
+    if CURRENT_MODE == "hardware":
+        return None, False
+
+    # Mode is "auto"
+    try:
+        devs = ReaderManager.list_readers()
+        if devs:
+            return None, False
+    except Exception:
+        pass
+    return MockBackend(), True
 
 # PyInstaller bundle support
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -87,10 +118,25 @@ class BiometricHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(content)
                 return
 
+        elif path == "/mode":
+            backend, is_mock = get_reader_backend()
+            self._send_json(200, {
+                "current_mode": CURRENT_MODE,
+                "active_backend": "mock" if is_mock else "hardware",
+                "available_modes": ["auto", "mock", "hardware"],
+            })
+            return
+
         elif path == "/health":
             try:
-                backend = READER_BACKEND
-                devs = ReaderManager.list_readers() if not USE_MOCK else MockBackend().list_devices()
+                backend, is_mock = get_reader_backend()
+                if is_mock:
+                    devs = MockBackend().list_devices()
+                    mode_label = "mock" if CURRENT_MODE == "mock" else "auto_mock_fallback"
+                else:
+                    devs = ReaderManager.list_readers()
+                    mode_label = "hardware"
+
                 data = [
                     {
                         "name": d.name,
@@ -98,12 +144,14 @@ class BiometricHTTPRequestHandler(BaseHTTPRequestHandler):
                         "device_id": d.device_id,
                         "vendor_id": f"0x{d.vendor_id:04x}",
                         "product_id": f"0x{d.product_id:04x}",
+                        "mode": mode_label,
+                        "is_mock": is_mock,
                     }
                     for d in devs
                 ]
                 self._send_json(200, data)
             except Exception as e:
-                self._send_json(500, {"error": str(e)})
+                self._send_json(500, {"error": str(e), "detail": str(e)})
             return
 
         self.send_response(404)
@@ -121,12 +169,29 @@ class BiometricHTTPRequestHandler(BaseHTTPRequestHandler):
             req = {}
 
         try:
+            if path == "/mode":
+                new_mode = req.get("mode", "").lower()
+                if new_mode in ("auto", "mock", "hardware"):
+                    CURRENT_MODE = new_mode
+                    backend, is_mock = get_reader_backend()
+                    self._send_json(200, {
+                        "status": "success",
+                        "current_mode": CURRENT_MODE,
+                        "active_backend": "mock" if is_mock else "hardware",
+                    })
+                else:
+                    self._send_json(400, {"error": f"Invalid mode '{new_mode}'. Use 'auto', 'mock', or 'hardware'."})
+                return
+
+            backend, is_mock = get_reader_backend()
+            target_desc = "Simulation Reader" if is_mock else "Physical USB Scanner"
+
             if path == "/scan":
-                print("[USB Device] Received /scan request -> activating scanner...")
-                with UareU4500(backend=READER_BACKEND) as reader:
-                    print(f"[USB Device] Reader '{reader.name}' open. Red light ON. Waiting for finger...")
+                print(f"[{target_desc}] Received /scan request -> activating scanner...")
+                with UareU4500(backend=backend) as reader:
+                    print(f"[{target_desc}] Reader '{reader.name}' open. Waiting for finger...")
                     img = reader.capture(wait_for_finger=True, timeout_ms=25000)
-                    print(f"[USB Device] Capture successful! Image: {img.width}x{img.height} @ {img.dpi} DPI")
+                    print(f"[{target_desc}] Capture successful! Image: {img.width}x{img.height} @ {img.dpi} DPI")
                     self._send_json(200, {
                         "width": img.width,
                         "height": img.height,
@@ -140,15 +205,15 @@ class BiometricHTTPRequestHandler(BaseHTTPRequestHandler):
                 finger_name = req.get("finger_name", "right_index")
                 stages = int(req.get("stages", 5))
 
-                print(f"[USB Device] Received /enroll request for '{username}' ({stages} touches)...")
-                with UareU4500(backend=READER_BACKEND) as reader:
+                print(f"[{target_desc}] Received /enroll request for '{username}' ({stages} touches)...")
+                with UareU4500(backend=backend) as reader:
                     tpl = reader.enroll(
                         stages=stages,
                         username=username,
                         finger_name=finger_name,
                         timeout_ms=30000,
                     )
-                    print(f"[USB Device] Enrollment complete for '{username}'.")
+                    print(f"[{target_desc}] Enrollment complete for '{username}'.")
                     self._send_json(200, {
                         "username": username,
                         "finger_name": finger_name,
@@ -163,11 +228,11 @@ class BiometricHTTPRequestHandler(BaseHTTPRequestHandler):
                     return
 
                 tpl = FingerprintTemplate.from_base64(b64_tpl)
-                print(f"[USB Device] Received /verify request for user '{tpl.username or 'unknown'}'...")
-                with UareU4500(backend=READER_BACKEND) as reader:
-                    print("[USB Device] Reader active. Place finger to verify...")
+                print(f"[{target_desc}] Received /verify request for user '{tpl.username or 'unknown'}'...")
+                with UareU4500(backend=backend) as reader:
+                    print(f"[{target_desc}] Reader active. Place finger to verify...")
                     res = reader.verify(tpl, timeout_ms=25000)
-                    print(f"[USB Device] Verification result: {res.matched} (Score: {res.score:.2f})")
+                    print(f"[{target_desc}] Verification result: {res.matched} (Score: {res.score:.2f})")
                     self._send_json(200, {
                         "matched": res.matched,
                         "score": round(res.score, 4),
@@ -186,7 +251,7 @@ class BiometricHTTPRequestHandler(BaseHTTPRequestHandler):
                     templates.append(FingerprintTemplate.from_base64(c["template_base64"]))
                     user_ids.append(c["user_id"])
 
-                with UareU4500(backend=READER_BACKEND) as reader:
+                with UareU4500(backend=backend) as reader:
                     res = reader.identify(templates)
                     matched_user = user_ids[res.index] if res.matched and res.index is not None else None
                     self._send_json(200, {
@@ -199,7 +264,7 @@ class BiometricHTTPRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(404, {"error": f"Unknown endpoint: {path}"})
 
         except Exception as e:
-            self._send_json(500, {"detail": str(e)})
+            self._send_json(500, {"detail": str(e), "error": str(e)})
 
 
 class BiometricServer(ThreadingHTTPServer):
@@ -208,15 +273,19 @@ class BiometricServer(ThreadingHTTPServer):
 
 def main():
     server = BiometricServer(("127.0.0.1", PORT), BiometricHTTPRequestHandler)
-    mode = "MOCK (Simulation)" if USE_MOCK else "PHYSICAL USB HARDWARE (libfprint 05ba:000a)"
+    backend, is_mock = get_reader_backend()
+    status_str = "MOCK (Virtual Simulation)" if is_mock else "PHYSICAL USB HARDWARE"
     print("=" * 65)
     print(f" DigitalPersona 4500 - Biometric Server running on:")
-    print(f"  👉 Web Console: http://127.0.0.1:{PORT}")
-    print(f"  👉 REST API:     http://127.0.0.1:{PORT}/health, /scan, /enroll...")
-    print(f"  Device Mode:     {mode}")
-    if not USE_MOCK:
-        print("  Notice:          Physical scanner red optical light will turn ON")
-        print("                   whenever a scan, enroll, or verify request runs!")
+    print(f"  -> Web Console:   http://127.0.0.1:{PORT}")
+    print(f"  -> REST API:      http://127.0.0.1:{PORT}/health, /scan, /enroll...")
+    print(f"  Operating Mode:   {CURRENT_MODE.upper()} ({status_str})")
+    if is_mock:
+        print("  Notice:           No physical hardware required! Realistic synthetic")
+        print("                    fingerprints are generated automatically.")
+    else:
+        print("  Notice:           Physical scanner red optical light will turn ON")
+        print("                    whenever a scan, enroll, or verify request runs!")
     print("=" * 65)
     print("Ready and listening. Press Ctrl+C to stop.")
 

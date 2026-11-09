@@ -26,7 +26,7 @@ hidden_imports = [
 ]
 
 binaries = []
-for dll in ['dpfpdd.dll', 'dpfj.dll']:
+for dll in ['DPFPApi.dll', 'dpfpdd.dll', 'dpfj.dll', 'nex_sdk.dll', 'dpfpdd_4k.dll', 'dpfpdd_ptapi.dll', 'dpfr6.dll', 'dpfr7.dll']:
     if os.path.exists(dll):
         binaries.append((dll, '.'))
 

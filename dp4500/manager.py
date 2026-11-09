@@ -3,6 +3,7 @@ Reader management, discovery, and backend selection.
 """
 
 from __future__ import annotations
+import sys
 import logging
 from typing import List, Optional, Type, Dict
 
@@ -81,10 +82,17 @@ class ReaderManager:
         if allow_mock:
             return MockBackend()
 
-        raise BackendNotAvailableError(
-            "Neither libfprint-2 nor the official DigitalPersona SDK was found on this system. "
-            "Please install libfprint-2 or pass backend='mock' to run in simulation mode."
-        )
+        if sys.platform.startswith("win"):
+            raise BackendNotAvailableError(
+                "DigitalPersona SDK runtime (dpfpdd.dll / dpfj.dll) was not found on this Windows system, "
+                "or no reader is connected. Please install the DigitalPersona U.are.U SDK, "
+                "copy dpfpdd.dll and dpfj.dll to the project directory, or pass backend='mock' (or --mock) to run in simulation mode."
+            )
+        else:
+            raise BackendNotAvailableError(
+                "Neither libfprint-2 nor the official DigitalPersona SDK was found on this system. "
+                "Please install libfprint-2 or pass backend='mock' to run in simulation mode."
+            )
 
     @classmethod
     def list_readers(cls, backend_name: Optional[str] = None) -> List[DeviceInfo]:

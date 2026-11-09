@@ -10,6 +10,14 @@ import time
 import glob
 from typing import Optional
 
+# Ensure safe output encoding on Windows terminals
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from dp4500 import (
     UareU4500,
     ReaderManager,
@@ -102,7 +110,7 @@ def cmd_capture(args):
         print("Reader ready. Please place your finger on the sensor...")
         img = reader.capture(wait_for_finger=True)
         img.save(out_path, format=args.format)
-        print(f"[✓] Fingerprint captured successfully!")
+        print(f"[OK] Fingerprint captured successfully!")
         print(f"    Dimensions: {img.width}x{img.height} pixels @ {img.dpi} DPI")
         print(f"    Quality:    {img.quality_score}%")
         print(f"    Saved to:   {out_path}")
@@ -126,7 +134,7 @@ def cmd_enroll(args):
             finger_name=args.finger,
         )
         tpl.save(out_path)
-        print(f"[✓] Enrollment complete!")
+        print(f"[OK] Enrollment complete!")
         print(f"    Template size: {tpl.size} bytes (Format: {tpl.format_type})")
         print(f"    Saved to:      {out_path}")
 
@@ -145,9 +153,9 @@ def cmd_verify(args):
         print("Place finger on the reader to verify...")
         result = reader.verify(tpl)
         if result.matched:
-            print(f"[✓] VERIFIED: Fingerprint matches! (Confidence score: {result.score:.2f})")
+            print(f"[OK] VERIFIED: Fingerprint matches! (Confidence score: {result.score:.2f})")
         else:
-            print(f"[✗] REJECTED: Fingerprint does NOT match! (Score: {result.score:.2f})")
+            print(f"[FAIL] REJECTED: Fingerprint does NOT match! (Score: {result.score:.2f})")
             sys.exit(2)
 
 
@@ -171,11 +179,11 @@ def cmd_identify(args):
         res = reader.identify(templates)
         if res.matched and res.template:
             matched_file = template_files[res.index] if res.index is not None else "unknown"
-            print(f"[✓] IDENTIFIED as user '{res.template.username or matched_file}'!")
+            print(f"[OK] IDENTIFIED as user '{res.template.username or matched_file}'!")
             print(f"    File:  {matched_file}")
             print(f"    Score: {res.score:.2f}")
         else:
-            print("[✗] NOT IDENTIFIED: No matching fingerprint found in gallery.")
+            print("[FAIL] NOT IDENTIFIED: No matching fingerprint found in gallery.")
             sys.exit(2)
 
 
@@ -193,9 +201,9 @@ def cmd_setup_udev(args):
     if args.install:
         success = install_udev_rule()
         if success:
-            print("[✓] Udev rule installed successfully! USB permissions updated.")
+            print("[OK] Udev rule installed successfully! USB permissions updated.")
         else:
-            print("[✗] Permission denied. Run with sudo: sudo dp4500 setup-udev --install")
+            print("[FAIL] Permission denied. Run with sudo: sudo dp4500 setup-udev --install")
     else:
         print("To install automatically, run:")
         print("  sudo dp4500 setup-udev --install")
@@ -267,7 +275,7 @@ def cmd_test(args):
     else:
         print("      No hardware reader detected (Mock mode verified).")
 
-    print("\n[✓] ALL TESTS PASSED SUCCESSFULLY!")
+    print("\n[OK] ALL TESTS PASSED SUCCESSFULLY!")
 
 
 def main():

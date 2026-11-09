@@ -25,6 +25,34 @@ class DP4500Client {
   }
 
   /**
+   * Get server operating mode ('auto', 'mock', 'hardware').
+   */
+  async getMode() {
+    const response = await fetch(`${this.baseUrl}/mode`);
+    if (!response.ok) {
+      throw new Error(`Failed to check server mode: ${response.statusText}`);
+    }
+    return await response.json();
+  }
+
+  /**
+   * Set server operating mode ('auto', 'mock', 'hardware').
+   * @param {string} mode
+   */
+  async setMode(mode) {
+    const response = await fetch(`${this.baseUrl}/mode`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: mode }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(err.error || "Failed to switch server mode");
+    }
+    return await response.json();
+  }
+
+  /**
    * Capture a single live fingerprint scan.
    * Blocks until a finger touches the sensor.
    * @returns {Promise<{width: number, height: number, dpi: number, quality_score: number, image_base64: string}>}
